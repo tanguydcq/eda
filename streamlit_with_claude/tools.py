@@ -314,6 +314,87 @@ class InteractiveSampler:
         likes = (df_feedback['feedback'] == 'like').sum()
         dislikes = (df_feedback['feedback'] == 'dislike').sum()
         return f"Feedbacks : {likes} likes, {dislikes} dislikes"
+    
+# ============================================================
+# 5. ÉVALUATION & MÉTRIQUES (STEP 4)
+# ============================================================
+
+class PatternEvaluator:
+    """Évalue les performances et la qualité des motifs sélectionnés."""
+    
+    def __init__(self, sampler, original_pool):
+        """
+        Args:
+            sampler: instance de InteractiveSampler (après session)
+            original_pool: DataFrame du pool complet (pool_P)
+        """
+        self.sampler = sampler
+        self.pool_P = original_pool
+        self.transactions = None  
+    
+    def _jaccard(self, a, b):
+        inter = len(a & b)
+        union = len(a | b)
+        return inter / union if union > 0 else 0
+
+    def acceptance_rate(self):
+        """Proportion de motifs aimés ('like') sur le total des feedbacks."""
+        if not self.sampler.feedback_history:
+            return np.nan
+        df_fb = pd.DataFrame(self.sampler.feedback_history)
+        likes = (df_fb['feedback'] == 'like').sum()
+        total = len(df_fb)
+        return likes / total if total > 0 else np.nan
+
+    def diversity(self, sample_df):
+        """Diversité moyenne (1 - similarité de Jaccard moyenne)."""
+        itemsets = sample_df['itemset'].tolist()
+        if len(itemsets) < 2:
+            return 1.0
+        sims = []
+        for i in range(len(itemsets)):
+            for j in range(i + 1, len(itemsets)):
+                sims.append(self._jaccard(set(itemsets[i]), set(itemsets[j])))
+        return 1 - np.mean(sims)
+
+    def coverage(self, sample_df, df_binary):
+        """Proportion de transactions couvertes par au moins un motif."""
+        n_tx = len(df_binary)
+        covered = np.zeros(n_tx, dtype=bool)
+        for itemset in sample_df['itemset']:
+            mask = df_binary[list(itemset)].all(axis=1)
+            covered |= mask
+        return covered.mean()
+
+    def stability(self, strategy='balanced', k=20, n_runs=4):
+        """Mesure la stabilité (overlap moyen entre plusieurs échantillons)."""
+        overlaps = []
+        for seed in range(n_runs):
+            temp_sampler = InteractiveSampler(self.pool_P, strategy=strategy)
+            s1 = set(map(frozenset, temp_sampler.importance_sampling(k=k)['itemset']))
+            s2 = set(map(frozenset, temp_sampler.importance_sampling(k=k)['itemset']))
+            if len(s1 | s2) > 0:
+                overlaps.append(len(s1 & s2) / len(s1 | s2))
+        return np.mean(overlaps)
+
+    def latency(self, k=100):
+        """Temps moyen d’échantillonnage."""
+        import time
+        start = time.time()
+        _ = self.sampler.importance_sampling(k=k)
+        return time.time() - start
+
+    def evaluate(self, df_binary):
+        """Évalue toutes les métriques et renvoie un résumé."""
+        sample_df = self.sampler.importance_sampling(k=30)
+        results = {
+            'acceptance_rate': self.acceptance_rate(),
+            'diversity': self.diversity(sample_df),
+            'coverage': self.coverage(sample_df, df_binary),
+            'stability_mean_overlap': self.stability(),
+            'sampling_time_sec_k100': self.latency(k=100)
+        }
+        return pd.DataFrame(results.items(), columns=['metric', 'value'])
 
 
 # ============================================================
