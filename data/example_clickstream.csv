@@ -1,0 +1,15 @@
+session_id,page,order
+session1,home,1
+session1,products,2
+session1,product_detail,3
+session1,cart,4
+session1,checkout,5
+session2,home,1
+session2,search,2
+session2,products,3
+session2,home,4
+session3,products,1
+session3,product_detail,2
+session3,cart,3
+session3,products,4
+session3,product_detail,5

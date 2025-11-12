@@ -1,0 +1,7 @@
+{
+  "user1": ["bread", "milk", "eggs"],
+  "user2": ["bread", "butter", "jam"],
+  "user3": ["milk", "eggs", "cheese", "bread"],
+  "user4": ["coffee", "sugar", "milk"],
+  "user5": ["bread", "milk", "butter", "jam", "eggs"]
+}

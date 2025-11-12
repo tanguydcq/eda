@@ -1,0 +1,27 @@
+[
+  {
+    "transaction_id": 1,
+    "items": ["bread", "milk", "eggs"],
+    "timestamp": "2023-01-01 10:00:00"
+  },
+  {
+    "transaction_id": 2,
+    "items": ["bread", "butter", "jam"],
+    "timestamp": "2023-01-01 11:00:00"
+  },
+  {
+    "transaction_id": 3,
+    "items": ["milk", "eggs", "cheese", "bread"],
+    "timestamp": "2023-01-01 12:00:00"
+  },
+  {
+    "transaction_id": 4,
+    "items": ["coffee", "sugar", "milk"],
+    "timestamp": "2023-01-01 13:00:00"
+  },
+  {
+    "transaction_id": 5,
+    "items": ["bread", "milk", "butter", "jam", "eggs"],
+    "timestamp": "2023-01-01 14:00:00"
+  }
+]

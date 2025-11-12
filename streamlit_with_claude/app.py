@@ -1,7 +1,11 @@
 import streamlit as st
 import pandas as pd
+import importlib
 import tools  # le module avec load_transactions, extract_frequent_itemsets, etc.
 import os
+
+# Forcer le rechargement du module tools pour s'assurer d'avoir la dernière version
+importlib.reload(tools)
 
 # --- Configuration de la page ---
 st.set_page_config(
@@ -12,6 +16,14 @@ st.set_page_config(
 
 # --- Titre de l'application ---
 st.title("🧠 Projet EDA - Outil d'exploration de motifs fréquents")
+
+# Bouton pour vider le cache (en cas de problème)
+if st.button("🔄 Vider le cache (si problème de chargement)"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    importlib.reload(tools)
+    st.success("Cache vidé et modules rechargés !")
+    st.rerun()
 
 # --- Sidebar avec informations et exemples ---
 with st.sidebar:
@@ -76,6 +88,8 @@ if 'sampler' not in st.session_state:
     st.session_state.sampler = None
 if 'sample' not in st.session_state:
     st.session_state.sample = None
+if 'uploaded_file' not in st.session_state:
+    st.session_state.uploaded_file = None
 
 # ============================================================
 # ÉTAPE 1 : CHARGEMENT DES DONNÉES
@@ -95,6 +109,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
+    st.session_state.uploaded_file = uploaded_file
     try:
         # Chargement du DataFrame selon le format choisi
         if file_format == 'csv':
@@ -116,7 +131,29 @@ if uploaded_file is not None:
                 df_loaded = pd.read_csv(uploaded_file, header=None, sep=' ', skipinitialspace=True)
                 
         elif file_format == 'json':
-            df_loaded = pd.read_json(uploaded_file)
+            # Utiliser notre fonction robuste pour gérer les erreurs JSON
+            try:
+                # Détection automatique du type de données
+                data_type = tools.detect_data_type(uploaded_file, file_format)
+                
+                # Charger avec notre fonction robuste
+                uploaded_file.seek(0)  # Revenir au début
+                result = tools.load_transactions(uploaded_file, file_format, data_type=data_type)
+                
+                # Si c'est des données transactionnelles, on a un DataFrame binaire
+                # Si c'est séquentiel, on a une liste
+                if isinstance(result, pd.DataFrame):
+                    df_loaded = result  # DataFrame binaire pour transactionnel
+                    st.info(f"📊 Données transactionnelles détectées ({len(result)} transactions)")
+                else:
+                    # Créer un DataFrame pour l'affichage des séquences
+                    df_loaded = pd.DataFrame({'sequences': result})
+                    st.info(f"📈 Données séquentielles détectées ({len(result)} séquences)")
+                    
+            except Exception as e:
+                st.error(f"❌ Erreur lors du chargement JSON : {e}")
+                df_loaded = None
+                
         elif file_format == 'parquet':
             df_loaded = pd.read_parquet(uploaded_file)
         else:
@@ -137,11 +174,26 @@ if uploaded_file is not None:
                     items = [str(item) for item in df_loaded.iloc[i] if pd.notna(item)]
                     st.text(f"Transaction {i+1}: {' '.join(items)}")
 
-            # Type de données
+            # Détection automatique du type de données
+            try:
+                if st.session_state.uploaded_file is not None:
+                    st.session_state.uploaded_file.seek(0)
+                    detected_type = tools.detect_data_type(st.session_state.uploaded_file, file_format)
+                    auto_type = 'séquentiel' if detected_type == 'sequential' else 'transactionnel'
+                    st.info(f"🤖 Type détecté automatiquement : **{auto_type}**")
+                else:
+                    auto_type = 'transactionnel'
+            except:
+                auto_type = 'transactionnel'
+            
+            # Type de données avec suggestion
             data_type = st.radio(
-                "Quel est le type de vos données ?",
+                "Confirmez le type de vos données :",
                 ('transactionnel', 'séquentiel'),
-                horizontal=True
+                index=0 if auto_type == 'transactionnel' else 1,
+                horizontal=True,
+                help="**Transactionnel**: Paniers d'achats, commandes (ordre non important)\n\n"
+                     "**Séquentiel**: Navigation web, logs d'événements (ordre important)"
             )
             st.session_state.data_type = data_type
             
@@ -171,18 +223,22 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
     # Détection du format des données
     st.subheader("Format des données")
     
-    # Essayer de détecter le format automatiquement
+    # Détection automatique améliorée
     detected_format = 'auto'
     try:
-        # Vérifier si c'est un format long (transaction_id, item)
-        if st.session_state.df.shape[1] >= 2:
-            # Format long probable
-            col_info = f"Le fichier contient {st.session_state.df.shape[1]} colonnes. "
-            if st.session_state.df.shape[1] == 2:
-                col_info += "Format 'long' détecté (transaction_id, item)."
-                detected_format = 'long'
-            else:
-                col_info += "Format ambigu. Veuillez sélectionner le format."
+        columns_lower = [col.lower().strip() for col in st.session_state.df.columns]
+        
+        # Vérification plus intelligente
+        if any('transaction' in col or 'trans' in col for col in columns_lower) and \
+           any('item' in col or 'product' in col for col in columns_lower):
+            detected_format = 'long'
+            col_info = "Format 'long' détecté (colonnes transaction_id, item)"
+        elif st.session_state.df.shape[1] > 5 and \
+             st.session_state.df.dtypes.apply(lambda x: x in ['int64', 'float64', 'bool']).mean() > 0.7:
+            detected_format = 'matrix'
+            col_info = "Format 'matrice' détecté (colonnes = items, valeurs binaires)"
+        elif st.session_state.df.shape[1] >= 2:
+            col_info = f"Le fichier contient {st.session_state.df.shape[1]} colonnes. Format à préciser."
         else:
             col_info = "Format 'wide' probable (une transaction par ligne)."
             detected_format = 'wide'
@@ -193,15 +249,20 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
     
     data_format = st.radio(
         "Sélectionnez le format de vos données :",
-        options=['auto', 'long', 'wide'],
-        index=0 if detected_format == 'auto' else (1 if detected_format == 'long' else 2),
+        options=['auto', 'long', 'wide', 'matrix'],
+        index=0 if detected_format == 'auto' else (
+            1 if detected_format == 'long' else (
+                3 if detected_format == 'matrix' else 2
+            )
+        ),
         horizontal=True,
         help="**Long**: Format avec colonnes (transaction_id, item) - un item par ligne\n\n"
              "**Wide**: Format avec items séparés par espaces - une transaction par ligne\n\n"
+             "**Matrix**: Format matrice binaire (colonnes = items, valeurs = présence)\n\n"
              "**Auto**: Détection automatique du format"
     )
     
-    # Exemple du format sélectionné
+    # Exemples des formats supportés
     with st.expander("ℹ️ Voir des exemples de formats"):
         col1, col2 = st.columns(2)
         with col1:
@@ -213,12 +274,24 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
 2,eggs
 2,bread
 3,banana""")
+            
+            st.write("**Format Matrix (binaire)**")
+            st.code("""eggs,milk,bread,butter
+1,1,0,0
+1,0,1,1
+0,1,1,0""")
+            
         with col2:
             st.write("**Format Wide (items par ligne)**")
-            st.code("""1 2 3 4 5
-1 7 6 8 9
-10
-5 2 11""")
+            st.code("""eggs milk
+eggs bread butter
+milk bread""")
+            
+            st.write("**Format Séquentiel**")
+            st.code("""user_id,event,timestamp
+1,login,2023-01-01 10:00
+1,search,2023-01-01 10:05
+1,purchase,2023-01-01 10:15""")
 
     col1, col2 = st.columns([2, 1])
     
@@ -235,24 +308,32 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
     if st.button("🚀 Lancer l'extraction", type="primary"):
         with st.spinner("Extraction en cours... Cela peut prendre quelques instants."):
             try:
-                # Sauvegarde temporaire du dataset transactionnel
-                tmp_path = "temp_transactions.csv"
-                
-                if data_format == 'long' or (data_format == 'auto' and st.session_state.df.shape[1] >= 2):
-                    # Sauvegarder avec en-tête pour le format long
-                    st.session_state.df.to_csv(tmp_path, index=False)
+                # Détection automatique du type de données si nécessaire
+                if st.session_state.data_type == 'transactionnel':
+                    data_type_param = 'transactional'
                 else:
-                    # Pour le format wide, sauvegarder sans en-tête
-                    # Supposer que le DataFrame contient déjà les transactions au bon format
-                    with open(tmp_path, 'w') as f:
-                        for idx, row in st.session_state.df.iterrows():
-                            # Prendre tous les items non-null de la ligne
-                            items = [str(item) for item in row if pd.notna(item)]
-                            if items:
-                                f.write(' '.join(items) + '\n')
-
-                # Chargement et binarisation via tools.py
-                df_bin = tools.load_transactions(tmp_path, format_type=data_format)
+                    data_type_param = 'sequential'
+                
+                # Chargement direct via la nouvelle fonction load_transactions
+                if st.session_state.uploaded_file is not None:
+                    st.session_state.uploaded_file.seek(0)  # Revenir au début du fichier
+                    file_input = st.session_state.uploaded_file
+                else:
+                    # Fallback: créer un fichier temporaire à partir du DataFrame
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix=f'.{file_format}', delete=False) as f:
+                        if file_format == 'csv':
+                            st.session_state.df.to_csv(f.name, index=False)
+                        elif file_format == 'json':
+                            st.session_state.df.to_json(f.name)
+                        file_input = f.name
+                
+                df_bin = tools.load_transactions(
+                    file_input=file_input,
+                    file_format=file_format,
+                    format_type=data_format,
+                    data_type=data_type_param
+                )
                 
                 st.info(f"📊 {len(df_bin)} transactions chargées avec {len(df_bin.columns)} items uniques")
 
@@ -262,10 +343,6 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
 
                 # Sauvegarde du pool (avec conversion automatique des frozensets)
                 output_path = tools.save_pool(pool_P, "pool_P_candidats.csv")
-
-                # Nettoyage du fichier temporaire
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
 
                 st.success(f"✅ Extraction terminée ! {len(pool_P)} motifs trouvés")
                 st.write(f"📁 Résultats sauvegardés dans : `{output_path}`")
@@ -303,7 +380,103 @@ if st.session_state.df is not None and st.session_state.data_type == 'transactio
 
 elif st.session_state.df is not None and st.session_state.data_type == 'séquentiel':
     st.header("2️⃣ Extraction de motifs séquentiels")
-    st.warning("⚠️ L'extraction de motifs séquentiels n'est pas encore implémentée dans cette version.")
+    
+    st.info("🔄 Support des données séquentielles maintenant disponible !")
+    
+    # Détection automatique pour les données séquentielles
+    try:
+        if st.session_state.uploaded_file is not None:
+            st.session_state.uploaded_file.seek(0)
+            detected_type = tools.detect_data_type(st.session_state.uploaded_file, file_format)
+        else:
+            detected_type = 'sequential'
+    except:
+        detected_type = 'sequential'
+    
+    if detected_type == 'sequential':
+        st.success("✅ Données séquentielles détectées automatiquement")
+    else:
+        st.warning("⚠️ Les données semblent transactionnelles. Êtes-vous sûr qu'elles sont séquentielles ?")
+    
+    # Options pour les données séquentielles
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        seq_format = st.selectbox(
+            "Format des séquences",
+            ['auto', 'long', 'sequential', 'wide'],
+            help="Sequential: Format spécialisé avec timestamps\n"
+                 "Long: user_id, event, [timestamp]\n"
+                 "Wide: Une séquence par ligne"
+        )
+    
+    with col2:
+        min_support_seq = st.slider(
+            "Support minimum (séquentiel)",
+            min_value=0.001, max_value=0.1, value=0.02, step=0.001
+        )
+    
+    if st.button("🚀 Extraire les motifs séquentiels", type="primary"):
+        with st.spinner("Extraction des séquences en cours..."):
+            try:
+                # Préparation de l'entrée de fichier
+                if st.session_state.uploaded_file is not None:
+                    st.session_state.uploaded_file.seek(0)
+                    file_input = st.session_state.uploaded_file
+                else:
+                    # Fallback: créer un fichier temporaire
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix=f'.{file_format}', delete=False) as f:
+                        if file_format == 'csv':
+                            st.session_state.df.to_csv(f.name, index=False)
+                        elif file_format == 'json':
+                            st.session_state.df.to_json(f.name)
+                        file_input = f.name
+                
+                # Chargement des séquences
+                sequences = tools.load_transactions(
+                    file_input=file_input,
+                    file_format=file_format,
+                    format_type=seq_format,
+                    data_type='sequential'
+                )
+                
+                st.success(f"✅ {len(sequences)} séquences chargées")
+                
+                # Affichage d'exemples de séquences
+                st.subheader("Aperçu des séquences")
+                for i, seq in enumerate(sequences[:5]):
+                    st.text(f"Séquence {i+1}: {' → '.join(seq)}")
+                
+                # Préparation pour PrefixSpan (si disponible)
+                prepared_sequences = tools.prepare_for_sequential_mining(sequences)
+                
+                st.info("📊 Séquences prêtes pour l'extraction de motifs séquentiels")
+                st.write(f"- Nombre de séquences : {len(sequences)}")
+                st.write(f"- Longueur moyenne : {sum(len(seq) for seq in sequences) / len(sequences):.2f}")
+                st.write(f"- Items uniques : {len(set(item for seq in sequences for item in seq))}")
+                
+                # Note sur les algorithmes séquentiels
+                st.info("💡 **Note**: Les motifs séquentiels nécessitent des algorithmes spécialisés comme PrefixSpan. "
+                       "Les séquences sont préparées et peuvent être exportées pour traitement externe.")
+                
+                # Sauvegarde des séquences
+                seq_output = "sequences_prepared.json"
+                import json
+                with open(seq_output, 'w') as f:
+                    json.dump(sequences, f, indent=2)
+                
+                st.download_button(
+                    label="⬇️ Télécharger les séquences",
+                    data=json.dumps(sequences, indent=2),
+                    file_name="sequences.json",
+                    mime="application/json"
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Erreur lors de l'extraction séquentielle : {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
 # ============================================================
 # ÉTAPE 3 : INTERACTION ET FEEDBACK
