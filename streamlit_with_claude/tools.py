@@ -395,10 +395,103 @@ class PatternEvaluator:
             'sampling_time_sec_k100': self.latency(k=100)
         }
         return pd.DataFrame(results.items(), columns=['metric', 'value'])
+    
+# ============================================================
+# 6. ÉCHANTILLONNAGE EN SORTIE DE MOTIFS
+# ============================================================
+
+class OutputPatternSampler:
+    """
+    Échantillonneur de motifs en sortie : génère un échantillon de motifs
+    sans fouille exhaustive, en se basant sur une mesure d'intérêt.
+    """
+
+    def __init__(self, df_binary, measure='support', n_samples=1000, max_length=3, random_state=None):
+        """
+        Args:
+            df_binary : DataFrame binaire (transactions x items)
+            measure : mesure d'intérêt ('support', 'lift', 'length')
+            n_samples : nombre de motifs à échantillonner
+            max_length : taille max des itemsets
+            random_state : graine aléatoire
+        """
+        self.df = df_binary
+        self.measure = measure
+        self.n_samples = n_samples
+        self.max_length = max_length
+        self.rng = np.random.default_rng(random_state)
+        self.item_names = list(df_binary.columns)
+
+    def _calc_support(self, itemset):
+        """Support = fréquence d'apparition du motif."""
+        mask = self.df[list(itemset)].all(axis=1)
+        return mask.mean()
+
+    def _calc_lift(self, itemset):
+        """Approximation du lift : support(itemset) / prod(supports singletons)."""
+        if len(itemset) < 2:
+            return 1.0
+        support_xy = self._calc_support(itemset)
+        support_prod = np.prod([self._calc_support([i]) for i in itemset])
+        return support_xy / support_prod if support_prod > 0 else np.nan
+
+    def _sample_itemset(self):
+        """Génère un itemset aléatoire (1 à max_length)."""
+        length = self.rng.integers(1, self.max_length + 1)
+        return frozenset(self.rng.choice(self.item_names, size=length, replace=False))
+
+    def generate_sample(self):
+        """Génère un échantillon de motifs selon la mesure d'intérêt."""
+        motifs = []
+        for _ in range(self.n_samples):
+            itemset = self._sample_itemset()
+            support = self._calc_support(itemset)
+            lift = self._calc_lift(itemset)
+            length = len(itemset)
+
+            motifs.append({
+                'itemset': itemset,
+                'support': support,
+                'lift': lift,
+                'length': length
+            })
+
+        df_motifs = pd.DataFrame(motifs)
+
+        # Pondération selon la mesure choisie
+        if self.measure == 'support':
+            probs = df_motifs['support'] / df_motifs['support'].sum()
+        elif self.measure == 'lift':
+            df_motifs['lift'] = df_motifs['lift'].replace([np.inf, np.nan], 0)
+            probs = df_motifs['lift'] / (df_motifs['lift'].sum() + 1e-10)
+        elif self.measure == 'length':
+            probs = df_motifs['length'] / df_motifs['length'].sum()
+        else:
+            raise ValueError("Mesure inconnue : choisissez 'support', 'lift' ou 'length'")
+
+        # Échantillonner selon la distribution
+        sampled_indices = self.rng.choice(
+            len(df_motifs), size=min(200, len(df_motifs)), replace=False, p=probs / probs.sum()
+        )
+        sampled = df_motifs.iloc[sampled_indices].copy()
+        sampled['sampling_prob'] = probs.iloc[sampled_indices]
+
+        return sampled
+
+    def plot_distribution(self, df_sampled):
+        """Affiche la distribution de la mesure d'intérêt dans l'échantillon."""
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(7, 4))
+        plt.hist(df_sampled[self.measure], bins=20)
+        plt.title(f"Distribution des motifs selon {self.measure}")
+        plt.xlabel(self.measure)
+        plt.ylabel("Fréquence")
+        plt.grid(alpha=0.3)
+        plt.show()
 
 
 # ============================================================
-# 5. OUTILS D'INTÉGRATION STREAMLIT
+# 7. OUTILS D'INTÉGRATION STREAMLIT
 # ============================================================
 
 def prepare_pool_from_csv(csv_path):
