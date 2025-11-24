@@ -4,76 +4,92 @@ from mlxtend.frequent_patterns import apriori
 from mlxtend.preprocessing import TransactionEncoder
 from itertools import combinations
 import warnings
+import time
+
 warnings.filterwarnings('ignore')
 
-
 # ============================================================
-# 1. CHARGEMENT ET PRÉPARATION DES DONNÉES
+# 1. CHARGEMENT ET PRÉPARATION DES DONNÉES (CORRIGÉ)
 # ============================================================
 
-def load_transactions(csv_path, format_type='auto'):
+def load_transactions(source, format_type='auto'):
     """
-    Charge et prépare les transactions à partir d'un fichier CSV.
-    
-    Parameters:
-    -----------
-    csv_path : str
-        Chemin vers le fichier CSV
-    format_type : str, default='auto'
-        Format des données:
-        - 'long': Format (transaction_id, item) avec en-tête
-        - 'wide': Format une transaction par ligne, items séparés par espaces
-        - 'auto': Détection automatique
-    
-    Returns:
-    --------
-    df : DataFrame binaire pour l'algorithme Apriori
+    Charge et prépare les transactions.
+    Accepte :
+    1. Un DataFrame Pandas (envoyé par Streamlit)
+    2. Un chemin de fichier (str)
     """
-    # Lecture du fichier
-    with open(csv_path, 'r') as f:
-        first_line = f.readline().strip()
+    df_raw = None
+
+    # CAS 1 : C'est un DataFrame (Cas Streamlit)
+    if isinstance(source, pd.DataFrame):
+        df_raw = source.copy()
     
-    # Détection automatique du format
+    # CAS 2 : C'est un chemin de fichier (Cas test local)
+    elif isinstance(source, str):
+        # On tente de charger le fichier
+        if source.endswith('.csv'):
+            try:
+                df_raw = pd.read_csv(source)
+            except:
+                df_raw = pd.read_csv(source, header=None, sep=None, engine='python')
+        # Autres formats si besoin...
+        else:
+            # Fallback text simple
+            with open(source, 'r') as f:
+                lines = f.readlines()
+            transactions_list = [line.strip().split() for line in lines]
+            return _binarize(transactions_list)
+
+    if df_raw is None:
+        raise ValueError("Source invalide : Attendu DataFrame ou chemin fichier.")
+
+    # --- TRAITEMENT DU DATAFRAME ---
+    transactions_list = []
+
+    # Détection auto simple
     if format_type == 'auto':
-        # Si la première ligne contient des virgules et ressemble à un en-tête
-        if ',' in first_line and any(char.isalpha() for char in first_line):
+        # Si 2 colonnes et beaucoup de répétitions dans la 1ère => Long format
+        if df_raw.shape[1] == 2 and df_raw.iloc[:,0].nunique() < len(df_raw):
             format_type = 'long'
         else:
             format_type = 'wide'
-    
+
     if format_type == 'long':
-        # Format: transaction_id,item
-        transactions = pd.read_csv(csv_path, header=0)
-        
-        # Vérifier si les colonnes existent
-        if transactions.shape[1] < 2:
-            raise ValueError("Le format 'long' nécessite au moins 2 colonnes (transaction_id, item)")
-        
-        # Prendre les deux premières colonnes
-        transactions = transactions.iloc[:, [0, 1]]
-        transactions.columns = ['transaction_id', 'item']
-        
-        # Convertir en format liste de listes
-        transactions['item'] = transactions['item'].astype(str)
-        transactions_list = transactions.groupby('transaction_id')['item'].apply(list).tolist()
-        
-    else:  # format_type == 'wide'
-        # Format: items séparés par espaces, une transaction par ligne
-        transactions_list = []
-        with open(csv_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line:  # Ignorer les lignes vides
-                    items = line.split()
-                    if items:  # S'assurer qu'il y a des items
-                        transactions_list.append(items)
+        # On suppose : col 0 = ID Transaction, col 1 = Item
+        # On renomme temporairement pour faciliter le groupby
+        df_raw.columns = ['id', 'item']
+        df_raw['item'] = df_raw['item'].astype(str)
+        transactions_list = df_raw.groupby('id')['item'].apply(list).tolist()
     
-    # Encodage binaire avec TransactionEncoder
+    else: # format 'wide'
+        # On itère ligne par ligne
+        for _, row in df_raw.iterrows():
+            transaction = []
+            for val in row:
+                # On ignore les valeurs vides/nulles
+                if pd.notna(val) and val != '':
+                    # Si la cellule contient déjà une liste (ex: JSON/Parquet)
+                    if isinstance(val, (list, np.ndarray)):
+                        transaction.extend([str(x) for x in val])
+                    else:
+                        transaction.append(str(val))
+            
+            if transaction:
+                transactions_list.append(transaction)
+
+    return _binarize(transactions_list)
+
+
+def _binarize(transactions_list):
+    """Helper interne pour l'encodage binaire (TransactionEncoder)"""
     te = TransactionEncoder()
-    te_ary = te.fit(transactions_list).transform(transactions_list)
-    df = pd.DataFrame(te_ary, columns=te.columns_)
-    
-    return df
+    try:
+        te_ary = te.fit(transactions_list).transform(transactions_list)
+        return pd.DataFrame(te_ary, columns=te.columns_)
+    except Exception as e:
+        print(f"Erreur binarisation: {e}")
+        return pd.DataFrame()
 
 
 # ============================================================
@@ -316,85 +332,142 @@ class InteractiveSampler:
         return f"Feedbacks : {likes} likes, {dislikes} dislikes"
     
 # ============================================================
-# 5. ÉVALUATION & MÉTRIQUES (STEP 4)
+# 5. ÉVALUATION & MÉTRIQUES (REFACTORISÉ)
 # ============================================================
 
-class PatternEvaluator:
-    """Évalue les performances et la qualité des motifs sélectionnés."""
+class BasePatternEvaluator:
+    """
+    CLASSE DE BASE : Évalue la QUALITÉ générique d'un ÉCHANTILLON de motifs.
+    """
     
-    def __init__(self, sampler, original_pool):
-        """
-        Args:
-            sampler: instance de InteractiveSampler (après session)
-            original_pool: DataFrame du pool complet (pool_P)
-        """
-        self.sampler = sampler
-        self.pool_P = original_pool
-        self.transactions = None  
+    def __init__(self, df_binary):
+        self.df_binary = df_binary
     
     def _jaccard(self, a, b):
         inter = len(a & b)
         union = len(a | b)
         return inter / union if union > 0 else 0
 
-    def acceptance_rate(self):
-        """Proportion de motifs aimés ('like') sur le total des feedbacks."""
-        if not self.sampler.feedback_history:
-            return np.nan
-        df_fb = pd.DataFrame(self.sampler.feedback_history)
-        likes = (df_fb['feedback'] == 'like').sum()
-        total = len(df_fb)
-        return likes / total if total > 0 else np.nan
-
     def diversity(self, sample_df):
         """Diversité moyenne (1 - similarité de Jaccard moyenne)."""
         itemsets = sample_df['itemset'].tolist()
-        if len(itemsets) < 2:
-            return 1.0
+        if len(itemsets) < 2: return 1.0
         sims = []
         for i in range(len(itemsets)):
             for j in range(i + 1, len(itemsets)):
                 sims.append(self._jaccard(set(itemsets[i]), set(itemsets[j])))
         return 1 - np.mean(sims)
 
-    def coverage(self, sample_df, df_binary):
+    def coverage(self, sample_df):
         """Proportion de transactions couvertes par au moins un motif."""
-        n_tx = len(df_binary)
+        n_tx = len(self.df_binary)
         covered = np.zeros(n_tx, dtype=bool)
-        for itemset in sample_df['itemset']:
-            mask = df_binary[list(itemset)].all(axis=1)
+        # Gestion compatibilité set/frozenset/list
+        itemsets_list = [list(itemset) for itemset in sample_df['itemset']]
+        
+        for itemset in itemsets_list:
+            # Filtrer les items qui n'existent pas dans le df (cas edge)
+            valid_cols = [col for col in itemset if col in self.df_binary.columns]
+            if not valid_cols: continue
+            mask = self.df_binary[valid_cols].all(axis=1)
             covered |= mask
         return covered.mean()
 
-    def stability(self, strategy='balanced', k=20, n_runs=4):
-        """Mesure la stabilité (overlap moyen entre plusieurs échantillons)."""
-        overlaps = []
-        for seed in range(n_runs):
-            temp_sampler = InteractiveSampler(self.pool_P, strategy=strategy)
-            s1 = set(map(frozenset, temp_sampler.importance_sampling(k=k)['itemset']))
-            s2 = set(map(frozenset, temp_sampler.importance_sampling(k=k)['itemset']))
-            if len(s1 | s2) > 0:
-                overlaps.append(len(s1 & s2) / len(s1 | s2))
-        return np.mean(overlaps)
+    def evaluate_sample_quality(self, sample_df):
+        """Calcule les métriques de qualité génériques."""
+        if sample_df is None or len(sample_df) == 0:
+            return {'diversity': np.nan, 'coverage': np.nan}
+            
+        return {
+            'diversity': self.diversity(sample_df),
+            'coverage': self.coverage(sample_df)
+        }
+
+class InteractiveEvaluator(BasePatternEvaluator):
+    """
+    Évalue le pipeline INTERACTIF (Exhaustif).
+    """
+    def __init__(self, df_binary, sampler, original_pool):
+        super().__init__(df_binary)
+        self.sampler = sampler
+        self.pool_P = original_pool
+
+    def acceptance_rate(self):
+        """Taux d'acceptation (spécifique au feedback)."""
+        fb_history = self.sampler.feedback_history
+        if not fb_history:
+            return np.nan
+        likes = sum(1 for f in fb_history if f['feedback'] == 'like')
+        return likes / len(fb_history)
 
     def latency(self, k=100):
-        """Temps moyen d’échantillonnage."""
-        import time
+        """Temps de ré-échantillonnage."""
         start = time.time()
         _ = self.sampler.importance_sampling(k=k)
         return time.time() - start
 
-    def evaluate(self, df_binary):
-        """Évalue toutes les métriques et renvoie un résumé."""
-        sample_df = self.sampler.importance_sampling(k=30)
-        results = {
-            'acceptance_rate': self.acceptance_rate(),
-            'diversity': self.diversity(sample_df),
-            'coverage': self.coverage(sample_df, df_binary),
-            'stability_mean_overlap': self.stability(),
-            'sampling_time_sec_k100': self.latency(k=100)
-        }
-        return pd.DataFrame(results.items(), columns=['metric', 'value'])
+    def stability(self, strategy='balanced', k=20, n_runs=4):
+        """Stabilité des échantillons générés."""
+        overlaps = []
+        for seed in range(n_runs):
+            # Note: InteractiveSampler n'a pas de seed explicite dans __init__, 
+            # on compte sur l'aléatoire numpy global ou on instancie à nouveau
+            np.random.seed(seed)
+            s1_sampler = InteractiveSampler(self.pool_P, strategy=strategy)
+            s1 = set(map(frozenset, s1_sampler.importance_sampling(k=k)['itemset']))
+            
+            np.random.seed(seed + 100)
+            s2_sampler = InteractiveSampler(self.pool_P, strategy=strategy)
+            s2 = set(map(frozenset, s2_sampler.importance_sampling(k=k)['itemset']))
+            
+            if len(s1 | s2) > 0:
+                overlaps.append(len(s1 & s2) / len(s1 | s2))
+        return np.mean(overlaps) if overlaps else np.nan
+
+    def evaluate_all(self, sample_df):
+        """Exécute toutes les évaluations."""
+        results = self.evaluate_sample_quality(sample_df)
+        results['acceptance_rate'] = self.acceptance_rate()
+        results['stability'] = self.stability()
+        results['latency (k=100)'] = self.latency()
+        return pd.DataFrame(results.items(), columns=['Métrique', 'Valeur'])
+
+
+class OutputSamplingEvaluator(BasePatternEvaluator):
+    """
+    Évalue le pipeline OUTPUT SAMPLING.
+    """
+    def __init__(self, df_binary, sampler_class):
+        super().__init__(df_binary)
+        self.sampler_class = sampler_class 
+
+    def latency(self, n_samples=1000, max_length=3):
+        """Temps de génération totale."""
+        start = time.time()
+        temp_sampler = self.sampler_class(self.df_binary, n_samples=n_samples, max_length=max_length)
+        _ = temp_sampler.generate_sample()
+        return time.time() - start
+
+    def stability(self, k=20, n_runs=4):
+        """Stabilité de l'échantillonnage en sortie."""
+        overlaps = []
+        for seed in range(n_runs):
+            temp_sampler_1 = self.sampler_class(self.df_binary, random_state=seed)
+            s1 = set(map(frozenset, temp_sampler_1.generate_sample()['itemset']))
+            
+            temp_sampler_2 = self.sampler_class(self.df_binary, random_state=seed + 100)
+            s2 = set(map(frozenset, temp_sampler_2.generate_sample()['itemset']))
+            
+            if len(s1 | s2) > 0:
+                overlaps.append(len(s1 & s2) / len(s1 | s2))
+        return np.mean(overlaps) if overlaps else np.nan
+
+    def evaluate_all(self, sample_df):
+        """Exécute toutes les évaluations."""
+        results = self.evaluate_sample_quality(sample_df)
+        results['stability'] = self.stability()
+        results['latency_total'] = self.latency()
+        return pd.DataFrame(results.items(), columns=['Métrique', 'Valeur'])
     
 # ============================================================
 # 6. ÉCHANTILLONNAGE EN SORTIE DE MOTIFS
