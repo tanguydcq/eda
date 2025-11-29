@@ -24,7 +24,7 @@ def format_df_for_display(df):
     return df_disp
 
 # --- Titre ---
-st.title("🧠 Projet EDA - Outil d'exploration de motifs fréquents")
+st.title("Projet EDA - Outil d'exploration de motifs fréquents")
 
 # ============================================================
 # INITIALISATION DES ÉTATS
@@ -80,7 +80,7 @@ with st.sidebar:
                     st.session_state.sampler = None
                     st.session_state.sample = None
                     st.session_state.out_sample = None
-                    st.success(f"✅ Chargé: {len(df_loaded)} lignes")
+                    st.success(f"Chargé: {len(df_loaded)} lignes")
 
         except Exception as e:
             st.error(f"Erreur chargement: {e}")
@@ -90,9 +90,9 @@ with st.sidebar:
     # --- SECTION EXEMPLES ---
     st.subheader("📥 Exemples")
     long_example = "transaction_id,item\n1,eggs\n1,milk\n2,bread"
-    st.download_button("⬇️ Exemple Long", data=long_example, file_name="long.csv", mime="text/csv")
+    st.download_button("Exemple Long", data=long_example, file_name="long.csv", mime="text/csv")
     wide_example = "eggs milk\nbread"
-    st.download_button("⬇️ Exemple Wide", data=wide_example, file_name="wide.txt", mime="text/plain")
+    st.download_button("Exemple Wide", data=wide_example, file_name="wide.txt", mime="text/plain")
     
     st.caption("Version 1.1 - EDA Project")
 
@@ -102,10 +102,10 @@ with st.sidebar:
 
 # Si aucune donnée n'est chargée
 if st.session_state.df is None:
-    st.info("👋 Veuillez charger un fichier dans la barre latérale pour commencer.")
+    st.info("Veuillez charger un fichier dans la barre latérale pour commencer.")
 
 # Si données chargées + Transactionnel
-elif st.session_state.df is not None and st.session_state.data_type == 'transactionnel':
+elif st.session_state.df is not None:
     
     # --- TON SNIPPET INTÉGRÉ ICI ---
     st.header("Préparation des données")
@@ -152,7 +152,7 @@ elif st.session_state.df is not None and st.session_state.data_type == 'transact
                         st.session_state.df, 
                         format_type=data_format
                     )
-                    st.success(f"✅ Binarisation réussie : {st.session_state.df_binary.shape[1]} items uniques.")
+                    st.success(f"Binarisation réussie : {st.session_state.df_binary.shape[1]} items uniques.")
                 except Exception as e:
                     st.error(f"Erreur lors de la binarisation : {e}")
 
@@ -166,10 +166,14 @@ elif st.session_state.df is not None and st.session_state.data_type == 'transact
     # On n'affiche les onglets que si la binarisation a été faite
     if st.session_state.df_binary is not None:
         
+        # Petit message informatif si on est en mode séquentiel "détourné"
+        if st.session_state.data_type == 'séquentiel':
+            st.caption("Mode 'Bag-of-Items' actif : L'ordre temporel est ignoré pour l'analyse Apriori.")
+
         with st.expander("Voir la matrice binaire (Aperçu)"):
             st.dataframe(st.session_state.df_binary.head())
 
-        tab1, tab2 = st.tabs(["🕵️ Pipeline 1 : Interactif", "🎲 Pipeline 2 : Output Sampling"])
+        tab1, tab2 = st.tabs(["Pipeline 1 : Interactif", "Pipeline 2 : Output Sampling"])
 
         # --- ONGLET 1 ---
         with tab1:
@@ -200,7 +204,7 @@ elif st.session_state.df is not None and st.session_state.data_type == 'transact
                     st.write("#### Résultats")
                     
                     csv_data = format_df_for_display(st.session_state.sample).to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 Télécharger (CSV)", data=csv_data, file_name="echantillon_interactif.csv", mime="text/csv")
+                    st.download_button("Télécharger (CSV)", data=csv_data, file_name="echantillon_interactif.csv", mime="text/csv")
                     
                     for idx, row in st.session_state.sample.iterrows():
                         cols = st.columns([4, 1, 1])
@@ -237,7 +241,7 @@ elif st.session_state.df is not None and st.session_state.data_type == 'transact
                 df_display = format_df_for_display(st.session_state.out_sample)
                 
                 csv_out = df_display.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Télécharger (CSV)", data=csv_out, file_name="echantillon_output.csv", mime="text/csv")
+                st.download_button("Télécharger (CSV)", data=csv_out, file_name="echantillon_output.csv", mime="text/csv")
                 
                 st.dataframe(df_display, use_container_width=True)
                 st.bar_chart(st.session_state.out_sample[meas])
@@ -248,4 +252,4 @@ elif st.session_state.df is not None and st.session_state.data_type == 'transact
                     st.table(ev.evaluate_all(st.session_state.out_sample))
 
 elif st.session_state.data_type == 'séquentiel':
-    st.warning("⚠️ L'analyse séquentielle (ordre temporel) n'est pas encore implémentée dans ce module. Veuillez sélectionner 'Transactionnel'.")
+    st.warning("L'analyse séquentielle (ordre temporel) n'est pas encore implémentée dans ce module. Veuillez sélectionner 'Transactionnel'.")

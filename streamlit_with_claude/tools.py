@@ -12,12 +12,14 @@ warnings.filterwarnings('ignore')
 # 1. CHARGEMENT ET PRÉPARATION DES DONNÉES (CORRIGÉ)
 # ============================================================
 
-def load_transactions(source, format_type='auto'):
+def load_transactions(source, format_type='auto', data_type='transactionnel'):
     """
-    Charge et prépare les transactions.
-    Accepte :
-    1. Un DataFrame Pandas (envoyé par Streamlit)
-    2. Un chemin de fichier (str)
+    Charge et prépare les transactions ou séquences.
+    
+    Args:
+        source: DataFrame ou chemin de fichier.
+        format_type: 'auto', 'long' (row-based), ou 'wide' (column-based).
+        data_type: 'transactionnel' (return matrice binaire) ou 'séquentiel' (return liste ordonnée).
     """
     df_raw = None
 
@@ -27,19 +29,16 @@ def load_transactions(source, format_type='auto'):
     
     # CAS 2 : C'est un chemin de fichier (Cas test local)
     elif isinstance(source, str):
-        # On tente de charger le fichier
         if source.endswith('.csv'):
             try:
                 df_raw = pd.read_csv(source)
             except:
                 df_raw = pd.read_csv(source, header=None, sep=None, engine='python')
-        # Autres formats si besoin...
         else:
-            # Fallback text simple
             with open(source, 'r') as f:
                 lines = f.readlines()
             transactions_list = [line.strip().split() for line in lines]
-            return _binarize(transactions_list)
+            return _process_output(transactions_list, data_type)
 
     if df_raw is None:
         raise ValueError("Source invalide : Attendu DataFrame ou chemin fichier.")
@@ -49,16 +48,26 @@ def load_transactions(source, format_type='auto'):
 
     # Détection auto simple
     if format_type == 'auto':
-        # Si 2 colonnes et beaucoup de répétitions dans la 1ère => Long format
-        if df_raw.shape[1] == 2 and df_raw.iloc[:,0].nunique() < len(df_raw):
+        # Si 2 ou 3 colonnes et beaucoup de répétitions dans la 1ère => Long format
+        if df_raw.shape[1] in [2, 3] and df_raw.iloc[:,0].nunique() < len(df_raw):
             format_type = 'long'
         else:
             format_type = 'wide'
 
     if format_type == 'long':
-        # On suppose : col 0 = ID Transaction, col 1 = Item
-        # On renomme temporairement pour faciliter le groupby
-        df_raw.columns = ['id', 'item']
+        # Gestion Format Long : ID, [Temps], Item
+        # On suppose : col 0 = ID Transaction
+        
+        # S'il y a 3 colonnes, on suppose : ID, Timestamp, Item
+        if df_raw.shape[1] >= 3:
+            df_raw.columns = ['id', 'time', 'item']
+            # Tri indispensable pour le séquentiel
+            if data_type == 'séquentiel':
+                df_raw = df_raw.sort_values(by=['id', 'time'])
+        else:
+            # 2 colonnes : ID, Item
+            df_raw.columns = ['id', 'item']
+        
         df_raw['item'] = df_raw['item'].astype(str)
         transactions_list = df_raw.groupby('id')['item'].apply(list).tolist()
     
@@ -67,9 +76,7 @@ def load_transactions(source, format_type='auto'):
         for _, row in df_raw.iterrows():
             transaction = []
             for val in row:
-                # On ignore les valeurs vides/nulles
                 if pd.notna(val) and val != '':
-                    # Si la cellule contient déjà une liste (ex: JSON/Parquet)
                     if isinstance(val, (list, np.ndarray)):
                         transaction.extend([str(x) for x in val])
                     else:
@@ -78,7 +85,17 @@ def load_transactions(source, format_type='auto'):
             if transaction:
                 transactions_list.append(transaction)
 
-    return _binarize(transactions_list)
+    return _process_output(transactions_list, data_type)
+
+
+def _process_output(transactions_list, data_type):
+    """Route vers la binarisation ou le format séquentiel brut."""
+    if data_type == 'transactionnel':
+        return _binarize(transactions_list)
+    else:
+        # Pour le séquentiel, on retourne un DataFrame avec une colonne 'sequence'
+        # Cela permet de garder l'ordre des items [a, b, a, c]
+        return pd.DataFrame({'sequence': transactions_list})
 
 
 def _binarize(transactions_list):
