@@ -9,7 +9,7 @@ import time
 warnings.filterwarnings('ignore')
 
 # ============================================================
-# 1. CHARGEMENT ET PRÉPARATION DES DONNÉES (CORRIGÉ)
+# 1. CHARGEMENT ET PRÉPARATION DES DONNÉES 
 # ============================================================
 
 def load_transactions(source, format_type='auto', data_type='transactionnel'):
@@ -314,7 +314,7 @@ class InteractiveSampler:
 
         sampled = self.pool_P.iloc[indices].copy()
         sampled['sampling_prob'] = probabilities[indices]
-        sampled['sample_id'] = indices  # CORRECTION: utiliser les indices réels
+        sampled['sample_id'] = indices  
         return sampled
 
     def add_feedback(self, sample_id, feedback):
@@ -349,7 +349,7 @@ class InteractiveSampler:
         return f"Feedbacks : {likes} likes, {dislikes} dislikes"
     
 # ============================================================
-# 5. ÉVALUATION & MÉTRIQUES (REFACTORISÉ)
+# 5. ÉVALUATION & MÉTRIQUES 
 # ============================================================
 
 class BasePatternEvaluator:

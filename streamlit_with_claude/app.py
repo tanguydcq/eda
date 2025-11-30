@@ -42,7 +42,7 @@ if st.session_state.data_type is None:
 with st.sidebar:
     st.header("Chargement des données")
     
-    # Choix du type de données (nécessaire pour ton snippet)
+    # Choix du type de données
     st.session_state.data_type = st.radio(
         "Type de données",
         ('transactionnel', 'séquentiel'),
@@ -55,7 +55,7 @@ with st.sidebar:
 
     if uploaded_file is not None:
         try:
-            # 1. Lecture en DataFrame Pandas UNIQUEMENT (Pas de binarisation ici)
+            # 1. Lecture en DataFrame Pandas UNIQUEMENT
             if file_format == 'csv':
                 try:
                     df_loaded = pd.read_csv(uploaded_file)
@@ -107,7 +107,6 @@ if st.session_state.df is None:
 # Si données chargées + Transactionnel
 elif st.session_state.df is not None:
     
-    # --- TON SNIPPET INTÉGRÉ ICI ---
     st.header("Préparation des données")
     
     col_conf, col_preview = st.columns([1, 2])
